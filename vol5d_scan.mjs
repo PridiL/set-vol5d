@@ -1,5 +1,5 @@
 /**
- * %Vol5D scan — SET and MAI top 20 (stocks + funds) by today's volume vs the
+ * %5DayVol scan (files still named vol5d) — SET and MAI top 20 (stocks + funds) by today's volume vs the
  * average volume of the market's previous 5 trading days.
  *
  *   node vol5d_scan.mjs <outDir> [YYYY-MM-DD|today] [morning|afternoon|render]
@@ -7,7 +7,8 @@
  *   Session defaults from the Bangkok clock: before 14:30 = morning, else afternoon.
  *   "render" skips the scan and only rebuilds the page from saved session files.
  *
- *   %Vol5D = volume(T) / average(volume T-1 .. T-5) * 100     (user's rule, 2026-11-03)
+ *   %5DayVol = (Current Volume Today / Average Volume of the Past 5 Days) * 100
+ *            = volume(T) / average(volume T-1 .. T-5) * 100     (user's rule, 2026-11-03)
  *   T-1..T-5 are the market's last 5 trading days before today (dates on which at
  *   least MIN_TODAY names have a bar), the same 5 dates for every name; a name that
  *   did not trade on one of them counts 0 volume for it. All 5 zero = no average,
@@ -166,7 +167,7 @@ if (SESSION !== 'render') {
   }
   writeFileSync(sessionFile(SESSION), JSON.stringify(result));
 
-  const csv = ['market,rank,symbol,type,last,change,pct_change,volume,avg_vol_prev5,days_traded_of_prev5,pct_vol5d'];
+  const csv = ['market,rank,symbol,type,last,change,pct_change,volume,avg_vol_prev5,days_traded_of_prev5,pct_5dayvol'];
   for (const m of ['SET', 'MAI'])
     result.tops[m].forEach((r, i) => csv.push([m, i + 1, r.name, r.kind, r.last, r.chg.toFixed(2), r.chgPct.toFixed(2),
       r.vol, r.avg5.toFixed(1), r.nPrev, r.pct.toFixed(2)].join(',')));
@@ -183,7 +184,7 @@ const cls = x => (x > 0 ? 'up' : x < 0 ? 'dn' : 'fl');
 const table = (res, m) => {
   const c = res.counts[m];
   return `<section><h3>${m} <span class="cnt">[<b class="up">${c.up}+</b> <b class="dn">${c.down}−</b> <b class="fl">${c.flat}=</b>]</span></h3>
-<table><thead><tr><th>#</th><th>Symbol</th><th class="r">Last</th><th class="r">Change</th><th class="r">%Chg</th><th class="r">Volume</th><th class="r">%Vol5D</th></tr></thead><tbody>
+<table><thead><tr><th>#</th><th>Symbol</th><th class="r">Last</th><th class="r">Change</th><th class="r">%Chg</th><th class="r">Volume</th><th class="r">%5DayVol</th></tr></thead><tbody>
 ${res.tops[m].map((r, i) => `<tr><td class="n">${i + 1}</td><td class="sym">${r.name}${r.kind !== 'stock' ? ` <span class="tag">${r.kind}</span>` : ''}</td>`
   + `<td class="r">${fmtN(r.last, 2)}</td><td class="r ${cls(r.chg)}">${sgn(r.chg)}</td><td class="r ${cls(r.chg)}">${sgn(r.chgPct)}%</td>`
   + `<td class="r">${fmtN(r.vol)}</td><td class="r">${fmtN(r.pct, 2)}%</td></tr>`).join('\n')}
@@ -202,7 +203,7 @@ const block = s => {
 ${res ? `<div class="grid">${table(res, 'SET')}${table(res, 'MAI')}</div>` : ''}</div>`;
 };
 const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>%Vol5D ${TODAY}</title><style>
+<title>%5DayVol ${TODAY}</title><style>
 :root{--bg:#fafaf8;--fg:#000;--mut:#6b6a66;--line:#e3e2de;--up:#0a7d32;--dn:#c0262d;--fl:#9a7400;--tag:#ecebe7;--rule:#cfcdc7}
 @media (prefers-color-scheme:dark){:root{--bg:#161615;--fg:#eceae4;--mut:#9b9992;--line:#2e2d2a;--up:#3ccf6e;--dn:#ff6b6b;--fl:#e8c547;--tag:#2a2927;--rule:#45433f}}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
@@ -222,9 +223,9 @@ td.r{font-weight:700}td.fl{color:#808080}section{min-width:0;overflow-x:auto}
 .tag{font-size:11px;background:var(--tag);color:var(--mut);padding:1px 5px;border-radius:4px}
 @media (max-width:520px){.grid{grid-template-columns:1fr}th,td{padding:4px 5px}}
 </style></head><body><main>
-<h1>%Vol5D — top ${TOP_N} stocks + funds</h1>
+<h1>%5DayVol — top ${TOP_N} stocks + funds</h1>
 <p class="sub">${TODAY} · TradingView daily bars (15-min delayed feed) ·
-%Vol5D = today's volume (T) as a % of the average volume of T-1 to T-5, the previous 5 trading days</p>
+<b>%5DayVol = (Current Volume Today ÷ Average Volume of the Past 5 Days) × 100</b> · past 5 days = T-1 to T-5, the previous 5 trading days</p>
 ${SESSIONS.map(block).join('\n')}
 </main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
