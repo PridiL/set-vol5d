@@ -22,6 +22,10 @@ on:
         type: choice
         options: [auto, morning, afternoon]
         default: auto
+      date:
+        description: "Trading date YYYY-MM-DD (blank = today; for re-running a past close)"
+        type: string
+        default: ""
 permissions:
   contents: read
   pages: write
@@ -47,7 +51,7 @@ jobs:
 
       - name: Bring back today's sessions from the live site
         run: |
-          d=$(date +%F); mkdir -p site/data
+          d="${{ inputs.date }}"; [ -n "$d" ] || d=$(date +%F); mkdir -p site/data
           for s in morning afternoon; do
             f="site/data/vol5d_${d}_${s}.json"
             curl -sf "${PAGES_URL}data/vol5d_${d}_${s}.json?v=$RANDOM$RANDOM" -o "$f" && echo "restored $s" || rm -f "$f"
@@ -56,7 +60,7 @@ jobs:
       - name: Scan (one retry on failure)
         id: scan
         run: |
-          d=$(date +%F); s="${{ inputs.session }}"
+          d="${{ inputs.date }}"; [ -n "$d" ] || d=$(date +%F); s="${{ inputs.session }}"
           if [ -z "$s" ] || [ "$s" = auto ]; then
             if [ "$(date +%H%M)" -lt 1430 ]; then s=morning; else s=afternoon; fi
           fi
