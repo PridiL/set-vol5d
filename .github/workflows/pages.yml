@@ -1,0 +1,109 @@
+# SET + MAI %Vol5D, refreshed on GitHub's servers (laptop on or off).
+# Publishes https://pridil.github.io/set-vol5d/ (hub tab #vol5d).
+#
+# WHEN: started by the user's cron-job.org job Mon-Fri 13:00 and 17:00 Bangkok
+# (a POST to this workflow's dispatches endpoint). No GitHub cron: on this account
+# scheduled runs never fired or started hours late (see the Forex RRG workflow).
+#
+# Session: input "session", or from the Bangkok clock (before 14:30 = morning).
+# The page shows both sessions of the day, so the run first downloads the
+# session files already on the live site (data/vol5d_<date>_<session>.json) and
+# rebuilds the page around them - the live site is the only state there is.
+#
+# No SET session today (holiday, weekend): the scan exits 3, nothing is published.
+# Fetch failure: one retry after 60 s, then a red run (GitHub emails the owner) and
+# the live page keeps its last good build.
+name: SET Vol5D
+on:
+  workflow_dispatch:
+    inputs:
+      session:
+        description: "auto = from the Bangkok clock (before 14:30 = morning)"
+        type: choice
+        options: [auto, morning, afternoon]
+        default: auto
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: vol5d-pages
+  cancel-in-progress: false
+env:
+  TZ: Asia/Bangkok
+  PYTHONIOENCODING: utf-8
+  PAGES_URL: https://pridil.github.io/set-vol5d/
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      publish: ${{ steps.scan.outputs.publish }}
+      stamp: ${{ steps.scan.outputs.stamp }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+
+      - name: Bring back today's sessions from the live site
+        run: |
+          d=$(date +%F); mkdir -p site/data
+          for s in morning afternoon; do
+            f="site/data/vol5d_${d}_${s}.json"
+            curl -sf "${PAGES_URL}data/vol5d_${d}_${s}.json?v=$RANDOM$RANDOM" -o "$f" && echo "restored $s" || rm -f "$f"
+          done
+
+      - name: Scan (one retry on failure)
+        id: scan
+        run: |
+          d=$(date +%F); s="${{ inputs.session }}"
+          if [ -z "$s" ] || [ "$s" = auto ]; then
+            if [ "$(date +%H%M)" -lt 1430 ]; then s=morning; else s=afternoon; fi
+          fi
+          echo "Bangkok $(date '+%F %H:%M') -> $s session"
+          set +e
+          node vol5d_scan.mjs site/data "$d" "$s"; code=$?
+          if [ $code -ne 0 ] && [ $code -ne 3 ]; then
+            echo "scan failed ($code) - retrying in 60 s"; sleep 60
+            node vol5d_scan.mjs site/data "$d" "$s"; code=$?
+          fi
+          set -e
+          if [ $code -eq 3 ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"; echo "No SET session today - nothing to publish."; exit 0
+          fi
+          [ $code -eq 0 ] || exit $code
+          cp site/data/latest.html site/index.html
+          stamp="$d $s $(date +%H%M%S)"
+          echo "$stamp" > site/stamp.txt
+          touch site/.nojekyll
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "stamp=$stamp" >> "$GITHUB_OUTPUT"
+          ls -la site site/data
+
+      - name: Privacy scan
+        if: steps.scan.outputs.publish == 'true'
+        run: python3 tools/privacy_scan.py site/index.html
+
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.scan.outputs.publish == 'true'
+        with: { path: site }
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    steps:
+      - id: pages
+        uses: actions/deploy-pages@v4
+      - name: Confirm the live page is this build
+        run: |
+          # Pages caches can hold the old page ~10 minutes.
+          want="${{ needs.build.outputs.stamp }}"
+          for i in $(seq 1 30); do
+            [ "$(curl -sf "${PAGES_URL}stamp.txt?v=$RANDOM$RANDOM")" = "$want" ] && { echo "OK: live page is '$want'"; exit 0; }
+            sleep 20
+          done
+          echo "::error::live page did not reach '$want' within 10 minutes"; exit 1
