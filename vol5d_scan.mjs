@@ -7,7 +7,10 @@
  *   Session defaults from the Bangkok clock: before 14:30 = morning, else afternoon.
  *   "render" skips the scan and only rebuilds the page from saved session files.
  *
- *   %Vol5D = (today's volume / mean(volume of the previous 5 traded bars) - 1) * 100
+ *   %Vol5D = today's volume / mean(volume of the previous 5 traded bars) * 100
+ *   (user's definition since 2026-11-03: today's volume as a % OF the 5-day average,
+ *   today excluded - 200% = twice the average. Until then it was the broker's
+ *   (ratio - 1) * 100, i.e. 100 points lower; the ranking is the same either way.)
  *   Days with no trade are skipped, not counted as 0 (matches the broker screen:
  *   HPT 2026-11-02 = +303.97%, zero-filling gives +2,939%).
  *
@@ -138,7 +141,7 @@ if (SESSION !== 'render') {
     if (!avg) continue;
     const pc = prior.at(-1)[4];
     rows.push({ ...u, last: today[4], chg: today[4] - pc, chgPct: pc ? (today[4] / pc - 1) * 100 : 0,
-                vol: today[5], avg5: avg, nPrev: prev.length, pct: (today[5] / avg - 1) * 100 });
+                vol: today[5], avg5: avg, nPrev: prev.length, pct: today[5] / avg * 100 });
   }
   console.log(`names with a bar dated ${TODAY}: ${rows.length}`);
   if (rows.length < MIN_TODAY) { console.log('market closed / no session today'); process.exit(3); }
@@ -171,7 +174,7 @@ const table = (res, m) => {
 <table><thead><tr><th>#</th><th>Symbol</th><th class="r">Last</th><th class="r">Change</th><th class="r">%Chg</th><th class="r">Volume</th><th class="r">%Vol5D</th></tr></thead><tbody>
 ${res.tops[m].map((r, i) => `<tr><td class="n">${i + 1}</td><td class="sym">${r.name}${r.kind !== 'stock' ? ` <span class="tag">${r.kind}</span>` : ''}</td>`
   + `<td class="r">${fmtN(r.last, 2)}</td><td class="r ${cls(r.chg)}">${sgn(r.chg)}</td><td class="r ${cls(r.chg)}">${sgn(r.chgPct)}%</td>`
-  + `<td class="r">${fmtN(r.vol)}</td><td class="r">${sgn(r.pct)}%</td></tr>`).join('\n')}
+  + `<td class="r">${fmtN(r.vol)}</td><td class="r">${fmtN(r.pct, 2)}%</td></tr>`).join('\n')}
 </tbody></table></section>`;
 };
 const SESSIONS = [
@@ -209,7 +212,7 @@ td.r{font-weight:700}td.fl{color:#808080}section{min-width:0;overflow-x:auto}
 </style></head><body><main>
 <h1>%Vol5D — top ${TOP_N} stocks + funds</h1>
 <p class="sub">${TODAY} · TradingView daily bars (15-min delayed feed) ·
-%Vol5D = today's volume ÷ average of the last 5 traded days − 1</p>
+%Vol5D = today's volume as a % of the average volume of the previous 5 traded days (today excluded)</p>
 ${SESSIONS.map(block).join('\n')}
 </main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
