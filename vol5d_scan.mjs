@@ -1,6 +1,6 @@
 /**
  * %5DayVol scan (files still named vol5d) — SET and MAI top 20 (index members) by today's volume vs the
- * average volume of the market's previous 5 trading days.
+ * average volume of its own latest 5 days with trading volume (zero-volume days skipped).
  *
  *   node vol5d_scan.mjs <outDir> [YYYY-MM-DD|today] [morning|afternoon|render]
  *
@@ -8,13 +8,12 @@
  *   "render" skips the scan and only rebuilds the page from saved session files.
  *
  *   %5DayVol = (Current Volume Today / Average Volume of the Past 5 Days) * 100
- *            = volume(T) / average(volume T-1 .. T-5) * 100     (user's rule, 2026-11-03)
- *   T-1..T-5 are the market's last 5 trading days before today (dates on which at
- *   least MIN_TODAY names have a bar), the same 5 dates for every name; a name that
- *   did not trade on one of them counts 0 volume for it. All 5 zero = no average,
- *   the name is left out of the ranking. 200% = twice the 5-day average.
- *   (Before 2026-11-03 the page copied the broker screen: (ratio - 1) * 100 over the
- *   name's own last 5 TRADED days - same as this for anything that traded daily.)
+ *   Past 5 days = the name's own latest 5 days before today WITH volume (user's
+ *   rule, 2026-11-03, second revision): zero-volume / no-bar days are skipped, so a
+ *   thinly traded name may reach back weeks (BARS covers that). A new listing with
+ *   fewer traded days averages what it has; none at all = left out of the ranking.
+ *   200% = twice the average. (Earlier the same day: the market's T-1..T-5 with 0 for
+ *   untraded days; before that, (ratio - 1) * 100 copying the broker screen.)
  *
  * Universe (user rule 2026-11-03): the SET and mai index members from set.or.th, in
  * constituents.json (fetch_constituents.py, refreshed weekly on the laptop and synced
@@ -36,7 +35,7 @@ const BKK_NOW = new Date(Date.now() + 7 * 3600e3).toISOString();        // run s
 const TODAY = !process.argv[3] || process.argv[3] === 'today' ? BKK_NOW.slice(0, 10) : process.argv[3];
 const SESSION = process.argv[4] || (BKK_NOW.slice(11, 16) < '14:30' ? 'morning' : 'afternoon');
 if (!['morning', 'afternoon', 'render'].includes(SESSION)) { console.error(`bad session ${SESSION}`); process.exit(1); }
-const TOP_N = 20, PREV = 5, BARS = 15, PARALLEL = 4, TIMEOUT_MS = 20000;
+const TOP_N = 20, PREV = 5, BARS = 40, PARALLEL = 4, TIMEOUT_MS = 20000;
 const MIN_TODAY = 200;      // fewer names with a bar today = holiday / no session
 const MAX_FAIL_PCT = 3;     // more fetch failures than this = treat the run as broken
 
@@ -158,9 +157,7 @@ if (SESSION !== 'render') {
   if ((perDate[TODAY] || 0) < MIN_TODAY) {
     console.log(`names with a bar dated ${TODAY}: ${perDate[TODAY] || 0}`); console.log('market closed / no session today'); process.exit(3);
   }
-  const prevDays = Object.keys(perDate).filter(d => d < TODAY && perDate[d] >= MIN_TODAY).sort().slice(-PREV);
-  console.log(`T = ${TODAY}, T-1..T-${PREV} = ${[...prevDays].reverse().join(' ')}`);
-  if (prevDays.length < PREV) { console.log(`FAIL: only ${prevDays.length} earlier trading days in the bars`); process.exit(1); }
+  console.log(`T = ${TODAY}`);
 
   const traded = [], rows = [];
   for (const u of uni) {
@@ -174,11 +171,10 @@ if (SESSION !== 'render') {
     const pc = prior.at(-1)[4];
     const row = { ...u, last: today[4], chg: today[4] - pc, chgPct: pc ? (today[4] / pc - 1) * 100 : 0, vol: today[5] };
     traded.push(row);
-    const byDate = new Map(prior.map(b => [bkkDate(b[0]), b[5]]));
-    const vols = prevDays.map(d => byDate.get(d) || 0);
-    const avg = vols.reduce((s, v) => s + v, 0) / PREV;
-    if (!avg) continue;                                          // no trade in T-1..T-5
-    rows.push({ ...row, avg5: avg, nPrev: vols.filter(v => v > 0).length, pct: today[5] / avg * 100 });
+    const base = prior.filter(b => b[5] > 0).slice(-PREV);       // the name's last 5 days WITH volume
+    if (!base.length) continue;                                  // no traded day in the bars
+    const avg = base.reduce((s, b) => s + b[5], 0) / base.length;
+    rows.push({ ...row, avg5: avg, nPrev: base.length, from: bkkDate(base[0][0]), pct: today[5] / avg * 100 });
   }
   console.log(`names with a bar dated ${TODAY}: ${traded.length}, ranked: ${rows.length}`);
 
@@ -190,10 +186,10 @@ if (SESSION !== 'render') {
   }
   writeFileSync(sessionFile(SESSION), JSON.stringify(result));
 
-  const csv = ['market,rank,symbol,type,last,change,pct_change,volume,avg_vol_prev5,days_traded_of_prev5,pct_5dayvol'];
+  const csv = ['market,rank,symbol,type,last,change,pct_change,volume,avg_vol_5traded,days_averaged,oldest_day_averaged,pct_5dayvol'];
   for (const m of ['SET', 'MAI'])
     result.tops[m].forEach((r, i) => csv.push([m, i + 1, r.name, r.kind, r.last, r.chg.toFixed(2), r.chgPct.toFixed(2),
-      r.vol, r.avg5.toFixed(1), r.nPrev, r.pct.toFixed(2)].join(',')));
+      r.vol, r.avg5.toFixed(1), r.nPrev, r.from, r.pct.toFixed(2)].join(',')));
   writeFileSync(join(OUT_DIR, `vol5d_${TODAY}_${SESSION}.csv`), csv.join('\n') + '\n');
   for (const m of ['SET', 'MAI'])
     console.log(`${SESSION} ${m}: ` + result.tops[m].map(r => `${r.name} ${r.pct.toFixed(2)}`).join(', '));
@@ -248,7 +244,7 @@ td.r{font-weight:700}td.fl{color:#808080}section{min-width:0;overflow-x:auto}
 </style></head><body><main>
 <h1>%5DayVol — top ${TOP_N} SET and MAI index members</h1>
 <p class="sub">${TODAY} · TradingView daily bars (15-min delayed feed) ·
-<b>%5DayVol = (Current Volume Today ÷ Average Volume of the Past 5 Days) × 100</b> · past 5 days = T-1 to T-5, the previous 5 trading days</p>
+<b>%5DayVol = (Current Volume Today ÷ Average Volume of the Past 5 Days) × 100</b> · past 5 days = the latest 5 days before today on which the stock traded (zero-volume days skipped)</p>
 ${SESSIONS.map(block).join('\n')}
 </main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
