@@ -165,8 +165,11 @@ if (SESSION !== 'render') {
   const traded = [], rows = [];
   for (const u of uni) {
     const bars = got[u.sym];
-    if (!bars?.length || bkkDate(bars.at(-1)[0]) !== TODAY) continue;
-    const today = bars.at(-1), prior = bars.slice(0, -1);
+    // T's bar by date, not the last bar: re-running a past date during a later session
+    // (date input) must not skip every name that has already traded today.
+    const iT = bars ? bars.findIndex(b => bkkDate(b[0]) === TODAY) : -1;
+    if (iT < 0) continue;
+    const today = bars[iT], prior = bars.slice(0, iT);
     if (!prior.length) continue;                                 // listed today: no previous close
     const pc = prior.at(-1)[4];
     const row = { ...u, last: today[4], chg: today[4] - pc, chgPct: pc ? (today[4] / pc - 1) * 100 : 0, vol: today[5] };
