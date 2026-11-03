@@ -1,5 +1,5 @@
 /**
- * %5DayVol scan (files still named vol5d) — SET and MAI top 20 (stocks + funds) by today's volume vs the
+ * %5DayVol scan (files still named vol5d) — SET and MAI top 20 (index members) by today's volume vs the
  * average volume of the market's previous 5 trading days.
  *
  *   node vol5d_scan.mjs <outDir> [YYYY-MM-DD|today] [morning|afternoon|render]
@@ -16,8 +16,10 @@
  *   (Before 2026-11-03 the page copied the broker screen: (ratio - 1) * 100 over the
  *   name's own last 5 TRADED days - same as this for anything that traded daily.)
  *
- * Universe: TradingView scanner, market "thailand", type stock + fund (closed-end
- * funds and ETFs). MAI = members of index SET:MAI, everything else = SET.
+ * Universe (user rule 2026-11-03): the SET and mai index members from set.or.th, in
+ * constituents.json (fetch_constituents.py, refreshed weekly on the laptop and synced
+ * to the repo) - 701 SET + 229 MAI on 2026-11-03, property funds/REITs included, ETFs
+ * not. Without that file: the TradingView scanner's whole Thai stock + fund list.
  * Bars: TradingView chart websocket, guest token (SET data 15 min delayed — a
  * 13:00 run sees the whole morning session, a 17:00 run the final volumes).
  * Each run writes vol5d_<date>_<session>.json/.csv; the page vol5d_<date>.html
@@ -121,7 +123,25 @@ mkdirSync(OUT_DIR, { recursive: true });
 
 if (SESSION !== 'render') {
   const t0 = Date.now();
-  const uni = await universe();
+  let uni = await universe();
+  // Index members (user rule 2026-11-03): rank only the stocks listed on set.or.th's SET
+  // and MAI index pages. constituents.json beside this script = {asOf, SET: [...], MAI: [...]};
+  // without it the whole TradingView universe is ranked as before.
+  const consFile = new URL('./constituents.json', import.meta.url);
+  if (existsSync(consFile)) {
+    const cons = JSON.parse(readFileSync(consFile, 'utf8'));
+    const byName = new Map(uni.map(u => [u.name, u]));
+    const missing = [];
+    uni = [];
+    for (const m of ['SET', 'MAI'])
+      for (const name of cons[m] || []) {
+        const u = byName.get(name);
+        if (!u) missing.push(name);                    // not in TV's scanner: try the chart feed anyway
+        uni.push({ ...(u || { sym: `SET:${name}`, name, kind: 'stock' }), mkt: m });
+      }
+    console.log(`index members as of ${cons.asOf}: SET ${cons.SET?.length || 0}, MAI ${cons.MAI?.length || 0}`
+      + (missing.length ? `; not in TradingView's scanner: ${missing.join(' ')}` : ''));
+  }
   console.log(`universe ${uni.length}: SET ${uni.filter(u => u.mkt === 'SET').length}, MAI ${uni.filter(u => u.mkt === 'MAI').length}`);
 
   let { got, bad } = await fetchAll(uni.map(u => u.sym), PARALLEL);
@@ -223,7 +243,7 @@ td.r{font-weight:700}td.fl{color:#808080}section{min-width:0;overflow-x:auto}
 .tag{font-size:11px;background:var(--tag);color:var(--mut);padding:1px 5px;border-radius:4px}
 @media (max-width:520px){.grid{grid-template-columns:1fr}th,td{padding:4px 5px}}
 </style></head><body><main>
-<h1>%5DayVol — top ${TOP_N} stocks + funds</h1>
+<h1>%5DayVol — top ${TOP_N} SET and MAI index members</h1>
 <p class="sub">${TODAY} · TradingView daily bars (15-min delayed feed) ·
 <b>%5DayVol = (Current Volume Today ÷ Average Volume of the Past 5 Days) × 100</b> · past 5 days = T-1 to T-5, the previous 5 trading days</p>
 ${SESSIONS.map(block).join('\n')}
