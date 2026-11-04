@@ -73,31 +73,47 @@ function unframe(data) {
 }
 const rand = () => Math.random().toString(36).slice(2, 14);
 
-function fetchBars(sym) {   // -> [[t,o,h,l,c,v], ...] oldest first
+// One websocket per worker, reused for every symbol (a chart session each). Until
+// 2026-11-04 every symbol opened its own connection + auth, and the 930-name scan
+// took 8-13 min, so the 13:00 page went live at ~13:09 and 17:00 at ~17:14.
+function openFeed() {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(WS_URL, { headers: { Origin: 'https://www.tradingview.com' } });
-    const cs = 'cs_' + rand(), bars = new Map();
-    const timer = setTimeout(() => { ws.close(); reject(new Error('timeout')); }, TIMEOUT_MS);
-    const done = (e, v) => { clearTimeout(timer); try { ws.close(); } catch {} e ? reject(e) : resolve(v); };
     const send = (m, p) => ws.send(frame({ m, p }));
-    ws.onerror = () => done(new Error('socket error'));
+    let cur = null;                                   // the symbol in flight: { cs, bars, finish }
+    const kill = e => { try { ws.close(); } catch {} cur?.finish(e); };
+    const connect = setTimeout(() => { kill(); reject(new Error('connect timeout')); }, TIMEOUT_MS);
+    ws.onerror = () => { clearTimeout(connect); reject(new Error('socket error')); kill(new Error('socket error')); };
+    ws.onclose = () => cur?.finish(new Error('socket closed'));
+    const feed = {
+      close: () => { try { ws.close(); } catch {} },
+      bars: sym => new Promise((res, rej) => {         // -> [[t,o,h,l,c,v], ...] oldest first
+        const cs = 'cs_' + rand(), bars = new Map();
+        const timer = setTimeout(() => finish(new Error('timeout')), TIMEOUT_MS);
+        const finish = (e, v) => {
+          if (cur?.cs !== cs) return;
+          clearTimeout(timer); cur = null;
+          try { send('chart_delete_session', [cs]); } catch {}
+          e ? rej(e) : res(v);
+        };
+        cur = { cs, bars, finish };
+        send('chart_create_session', [cs, '']);
+        send('resolve_symbol', [cs, 'sym1', '=' + JSON.stringify({ symbol: sym, adjustment: 'splits' })]);
+        send('create_series', [cs, 's1', 's1', 'sym1', '1D', BARS, '']);
+      }),
+    };
     ws.onmessage = ev => {
       for (const msg of unframe(String(ev.data))) {
         if (msg.startsWith('~h~')) { ws.send(`~m~${msg.length}~m~${msg}`); continue; }
         let j; try { j = JSON.parse(msg); } catch { continue; }
-        if (j.session_id) {
-          send('set_auth_token', ['unauthorized_user_token']);
-          send('chart_create_session', [cs, '']);
-          send('resolve_symbol', [cs, 'sym1', '=' + JSON.stringify({ symbol: sym, adjustment: 'splits' })]);
-          send('create_series', [cs, 's1', 's1', 'sym1', '1D', BARS, '']);
-          continue;
-        }
-        if (['symbol_error', 'series_error', 'protocol_error', 'critical_error'].includes(j.m))
-          return done(new Error(j.m));
-        if (j.m === 'timescale_update' || j.m === 'du')
-          for (const b of j.p?.[1]?.s1?.s || []) bars.set(b.v[0], b.v);
-        if (j.m === 'series_completed')
-          return done(null, [...bars.values()].sort((a, b) => a[0] - b[0]));
+        if (j.session_id) { clearTimeout(connect); send('set_auth_token', ['unauthorized_user_token']); resolve(feed); continue; }
+        if (['protocol_error', 'critical_error'].includes(j.m)) { kill(new Error(j.m)); continue; }
+        if (!cur || j.p?.[0] !== cur.cs) continue;       // late messages of a finished session
+        if (['symbol_error', 'series_error'].includes(j.m)) cur.finish(new Error(j.m));
+        else if (j.m === 'timescale_update' || j.m === 'du')
+          for (const b of j.p?.[1]?.s1?.s || []) cur.bars.set(b.v[0], b.v);
+        else if (j.m === 'series_completed')
+          cur.finish(null, [...cur.bars.values()].sort((a, b) => a[0] - b[0]));
       }
     };
   });
@@ -107,10 +123,13 @@ async function fetchAll(syms, parallel) {
   const got = {}, bad = [];
   let k = 0;
   await Promise.all(Array.from({ length: parallel }, async () => {
+    let feed = null;
     while (k < syms.length) {
       const s = syms[k++];
-      try { got[s] = await fetchBars(s); } catch { bad.push(s); }
+      try { feed ||= await openFeed(); got[s] = await feed.bars(s); }
+      catch { bad.push(s); feed?.close(); feed = null; }   // fresh connection after any error
     }
+    feed?.close();
   }));
   return { got, bad };
 }
