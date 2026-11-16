@@ -1,5 +1,5 @@
 {
- "asOf": "2026-11-03",
+ "asOf": "2026-11-16",
  "source": "set.or.th /api/set/stock/list, securityType S",
  "SET": [
   "2S",

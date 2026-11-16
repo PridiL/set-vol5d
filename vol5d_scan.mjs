@@ -136,6 +136,17 @@ async function fetchAll(syms, parallel) {
 
 // ---------------------------------------------------------------- scan
 const bkkDate = t => new Date((t + 7 * 3600) * 1000).toISOString().slice(0, 10);
+// SET tick sizes, [price below, tick]. From 2026-11-16 stocks at 5-50 baht trade on finer
+// ticks (set.or.th "ปรับปรุง Tick Size"). TradingView's bars carry the traded prices, but its
+// symbol info still lists the old ticks (BEM minmov 0.05 on 2026-11-16 while trading 6.36), so
+// every price is snapped to the table of its own date, 2 decimals (user rule 2026-11-16).
+const TICK_CHANGE = '2026-11-16';
+const TICKS_OLD = [[2, .01], [5, .02], [10, .05], [25, .1], [100, .25], [200, .5], [400, 1], [Infinity, 2]];
+const TICKS_NEW = [[2, .01], [10, .02], [25, .05], [50, .1], [100, .25], [200, .5], [400, 1], [Infinity, 2]];
+const snap = (p, date) => {
+  const t = (date >= TICK_CHANGE ? TICKS_NEW : TICKS_OLD).find(([below]) => p < below)[1];
+  return +(Math.round(p / t) * t).toFixed(2);
+};
 const sessionFile = s => join(OUT_DIR, `vol5d_${TODAY}_${s}.json`);
 mkdirSync(OUT_DIR, { recursive: true });
 
@@ -178,7 +189,7 @@ if (SESSION !== 'render') {
   }
   console.log(`T = ${TODAY}`);
 
-  const traded = [], rows = [];
+  const traded = [], rows = [], offGrid = [];
   for (const u of uni) {
     const bars = got[u.sym];
     // T's bar by date, not the last bar: re-running a past date during a later session
@@ -187,8 +198,9 @@ if (SESSION !== 'render') {
     if (iT < 0) continue;
     const today = bars[iT], prior = bars.slice(0, iT);
     if (!prior.length) continue;                                 // listed today: no previous close
-    const pc = prior.at(-1)[4];
-    const row = { ...u, last: today[4], chg: today[4] - pc, chgPct: pc ? (today[4] / pc - 1) * 100 : 0, vol: today[5] };
+    const last = snap(today[4], TODAY), pc = snap(prior.at(-1)[4], bkkDate(prior.at(-1)[0]));
+    if (Math.abs(last - today[4]) > 1e-6) offGrid.push(`${u.name} ${today[4]}->${last}`);
+    const row = { ...u, last, chg: +(last - pc).toFixed(2), chgPct: pc ? (last / pc - 1) * 100 : 0, vol: today[5] };
     traded.push(row);
     const base = prior.filter(b => b[5] > 0).slice(-PREV);       // the name's last 5 days WITH volume
     if (!base.length) continue;                                  // no traded day in the bars
@@ -196,6 +208,7 @@ if (SESSION !== 'render') {
     rows.push({ ...row, avg5: avg, nPrev: base.length, from: bkkDate(base[0][0]), pct: today[5] / avg * 100 });
   }
   console.log(`names with a bar dated ${TODAY}: ${traded.length}, ranked: ${rows.length}`);
+  console.log(`last price off the tick grid (snapped): ${offGrid.length ? offGrid.join(', ') : 'none'}`);
 
   const result = { date: TODAY, session: SESSION, built: BKK_NOW.slice(11, 16), tops: {}, counts: {} };
   for (const m of ['SET', 'MAI']) {
